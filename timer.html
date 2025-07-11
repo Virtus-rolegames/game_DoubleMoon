@@ -1,0 +1,302 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <title>PyScript: Шарик с фоном и звуком</title>
+  <link rel="stylesheet" href="https://pyscript.net/releases/2024.1.1/core.css" />
+  <script type="module" src="https://pyscript.net/releases/2024.1.1/core.js"></script>
+  <style>
+    html, body {
+      margin: 0; padding: 0; height: 100%;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      background: #f0f0f0;
+    }
+    #container {
+      position: relative;
+    }
+    canvas {
+      display: block;
+      border: 1px solid black;
+    }
+  </style>
+</head>
+<body>
+  <div id="container">
+    <canvas id="canvas"></canvas>
+  </div>
+
+  <py-script>
+import js
+import asyncio
+import time
+from pyodide.ffi import create_proxy
+
+params = js.URLSearchParams.new(js.window.location.search)
+canvas = js.document.getElementById("canvas")
+
+# Глобальные переменные
+width = 400
+height = 200
+ctx = None
+speed = None
+h = None
+k = None
+a = None
+checkpoints = []
+passed = set()
+x = 0
+last_time = time.time()
+running = False
+show_ball = False
+is_cooldown = False
+fade_alpha = 0.0
+fade_speed = 0.05
+
+# Время полного пути
+try:
+    total_time = float(params.get("time"))
+    if total_time <= 0:
+        total_time = 5.0
+except:
+    total_time = 5.0
+
+# Время перезарядки
+try:
+    cooldown = float(params.get("cooldown"))
+    if cooldown < 0:
+        cooldown = 0.0
+except:
+    cooldown = 0.0
+
+# Количество раундов
+try:
+    rounds = params.get("rounds")
+    rounds = int(rounds)
+    if rounds <= 0:
+        rounds = None
+except:
+    rounds = None
+
+# Debug
+debug = params.get("debug")
+debug = (debug is not None and debug.lower() == "true")
+
+sound = js.Audio.new("kolokol.mp3")
+
+# Загрузка фонов и солнца
+bg_day_image = js.Image.new()
+bg_day_loaded = False
+bg_night_image = js.Image.new()
+bg_night_loaded = False
+sun_image = js.Image.new()
+sun_loaded = False
+eclipse_image = js.Image.new()
+eclipse_loaded = False
+
+def initialize_params():
+    global ctx, width, height, speed, h, k, a, checkpoints
+    ctx = canvas.getContext("2d")
+    width = canvas.width
+    height = canvas.height
+    speed = width / total_time
+    h = width / 2
+    k = height / 8
+    a = 4 * (height/2 - k) / (width ** 2)
+    checkpoints = [width * 0.25, width * 0.5, width * 0.75, width]
+
+def draw_background():
+    ctx.clearRect(0, 0, width, height)
+    if bg_day_loaded:
+        ctx.drawImage(bg_day_image, 0, 0, width, height)
+    else:
+        ctx.fillStyle = "#cccccc"
+        ctx.fillRect(0, 0, width, height)
+    if bg_night_loaded and fade_alpha > 0:
+        ctx.globalAlpha = fade_alpha
+        ctx.drawImage(bg_night_image, 0, 0, width, height)
+        ctx.globalAlpha = 1.0
+
+def draw_stripes():
+    if not debug:
+        return
+    ctx.fillStyle = "red"
+    num_stripes = 3
+    stripe_width = 2
+    spacing = width / (num_stripes + 1)
+    for i in range(1, num_stripes + 1):
+        x_pos = i * spacing
+        ctx.fillRect(x_pos - stripe_width // 2, 0, stripe_width, height)
+
+def draw_ball_and_dot(x, y):
+    if debug:
+        ctx.beginPath()
+        ctx.arc(x, y, 20, 0, 2 * 3.14)
+        ctx.fillStyle = "yellow"
+        ctx.fill()
+
+        ctx.beginPath()
+        ctx.arc(x, y, 2, 0, 2 * 3.14)
+        ctx.fillStyle = "black"
+        ctx.fill()
+
+current_round = 1  # Текущий раунд, стартуем с 1
+
+async def animate():
+    global x, last_time, passed, running, show_ball, is_cooldown, fade_alpha, current_round
+    while True:
+        await asyncio.sleep(0.016)
+        if ctx is None:
+            continue
+
+        if not running:
+            # Пока не стартовали — рисуем только фон и полоски, но НЕ солнце/затмение
+            draw_background()
+            draw_stripes()
+            continue
+
+        current_time = time.time()
+        dt = current_time - last_time
+        last_time = current_time
+
+        if is_cooldown and fade_alpha < 1.0:
+            fade_alpha = min(fade_alpha + fade_speed, 1.0)
+        elif not is_cooldown and fade_alpha > 0.0:
+            fade_alpha = max(fade_alpha - fade_speed, 0.0)
+
+        prev_x = x
+        x += speed * dt
+
+        if x > width:
+            x = width
+            passed.clear()
+
+            draw_background()
+            draw_stripes()
+
+            y = a * (x - h) ** 2 + height / 2 - a * h ** 2
+
+            if rounds is not None and current_round == rounds and eclipse_loaded:
+                img_to_draw = eclipse_image
+            else:
+                img_to_draw = sun_image if sun_loaded else None
+
+            if img_to_draw:
+                sun_w = sun_h = height * 0.1
+                ctx.drawImage(img_to_draw, x - sun_w/2, y - sun_h/2, sun_w, sun_h)
+
+            if show_ball:
+                draw_ball_and_dot(x, y)
+
+            sound.currentTime = 0
+            sound.play()
+
+            show_ball = False
+            is_cooldown = True
+
+            cooldown_start = time.time()
+            while time.time() - cooldown_start < cooldown:
+                await asyncio.sleep(0.016)
+                if fade_alpha < 1.0:
+                    fade_alpha = min(fade_alpha + fade_speed, 1.0)
+                draw_background()
+                draw_stripes()
+
+            current_round += 1
+
+            # Если вышли за лимит раундов, останавливаем анимацию и НЕ рисуем дальше
+            if rounds is not None and current_round > rounds:
+                running = False
+                continue
+
+            x = 0
+            last_time = time.time()
+
+            is_cooldown = False
+
+            sound.currentTime = 0
+            sound.play()
+
+            show_ball = True
+            continue
+
+        for point in checkpoints:
+            if prev_x < point <= x and point not in passed:
+                sound.currentTime = 0
+                sound.play()
+                passed.add(point)
+
+        y = a * (x - h) ** 2 + height / 2 - a * h ** 2
+
+        draw_background()
+        draw_stripes()
+
+        if running:
+            if rounds is not None and current_round >= rounds and eclipse_loaded:
+                img_to_draw = eclipse_image
+            elif sun_loaded:
+                img_to_draw = sun_image
+            else:
+                img_to_draw = None
+
+            if img_to_draw:
+                sun_w = sun_h = height * 0.1
+                ctx.drawImage(img_to_draw, x - sun_w/2, y - sun_h/2, sun_w, sun_h)
+
+            if show_ball:
+                draw_ball_and_dot(x, y)
+
+def on_keydown(event):
+    global running, show_ball, last_time, x, current_round
+    if event.key == " ":
+        if not running and bg_day_loaded:
+            initialize_params()
+            running = True
+            show_ball = True
+            x = 0
+            current_round = 1  # При старте анимации начинаем с первого круга
+            last_time = time.time()
+            sound.currentTime = 0
+            sound.play()
+
+keydown_proxy = create_proxy(on_keydown)
+js.window.addEventListener("keydown", keydown_proxy)
+
+def on_bg_day_load(event):
+    global bg_day_loaded, width, height, ctx
+    bg_day_loaded = True
+    width = bg_day_image.width
+    height = bg_day_image.height
+    canvas.width = width
+    canvas.height = height
+    initialize_params()
+    ctx = canvas.getContext("2d")
+    draw_background()
+
+def on_bg_night_load(event):
+    global bg_night_loaded
+    bg_night_loaded = True
+
+def on_sun_load(event):
+    global sun_loaded
+    sun_loaded = True
+
+def on_eclipse_load(event):
+    global eclipse_loaded
+    eclipse_loaded = True
+
+bg_day_image.addEventListener("load", create_proxy(on_bg_day_load))
+bg_night_image.addEventListener("load", create_proxy(on_bg_night_load))
+sun_image.addEventListener("load", create_proxy(on_sun_load))
+eclipse_image.addEventListener("load", create_proxy(on_eclipse_load))
+
+bg_day_image.src = "background_day.png"
+bg_night_image.src = "background_night.png"
+sun_image.src = "sun.png"
+eclipse_image.src = "eclipse.png"
+
+asyncio.ensure_future(animate())
+  </py-script>
+</body>
+</html>
