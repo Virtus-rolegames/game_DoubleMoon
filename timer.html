@@ -27,7 +27,7 @@
     <canvas id="canvas"></canvas>
   </div>
 
-  <py-script>
+<py-script>
 import js
 import asyncio
 import time
@@ -53,6 +53,11 @@ show_ball = False
 is_cooldown = False
 fade_alpha = 0.0
 fade_speed = 0.05
+round_count = 0
+max_rounds = None
+parabola_offset = 0.0
+steepness_factor = 1.0
+eclipse_mode = False
 
 # Время полного пути
 try:
@@ -70,16 +75,29 @@ try:
 except:
     cooldown = 0.0
 
-# Количество раундов
+# Смещение по вертикали
 try:
-    rounds = params.get("rounds")
-    rounds = int(rounds)
-    if rounds <= 0:
-        rounds = None
+    parabola_offset = -float(params.get("offset") or 0.0)
 except:
-    rounds = None
+    parabola_offset = 0.0
 
-# Debug
+# Крутость параболы
+try:
+    steepness_factor = float(params.get("steepness") or 1.0)
+    if steepness_factor <= 0:
+        steepness_factor = 1.0
+except:
+    steepness_factor = 1.0
+
+# Кол-во раундов
+try:
+    max_rounds = int(params.get("rounds"))
+    if max_rounds <= 0:
+        max_rounds = None
+except:
+    max_rounds = None
+
+# Debug режим
 debug = params.get("debug")
 debug = (debug is not None and debug.lower() == "true")
 
@@ -103,7 +121,7 @@ def initialize_params():
     speed = width / total_time
     h = width / 2
     k = height / 8
-    a = 4 * (height/2 - k) / (width ** 2)
+    a = 4 * (height/2 - k) / (width ** 2) * steepness_factor
     checkpoints = [width * 0.25, width * 0.5, width * 0.75, width]
 
 def draw_background():
@@ -129,6 +147,20 @@ def draw_stripes():
         x_pos = i * spacing
         ctx.fillRect(x_pos - stripe_width // 2, 0, stripe_width, height)
 
+def draw_trajectory():
+    if not debug:
+        return
+    ctx.beginPath()
+    ctx.strokeStyle = "black"
+    ctx.lineWidth = 1
+    for px in range(0, int(width)):
+        py = a * (px - h) ** 2 + height / 2 - a * h ** 2 + parabola_offset
+        if px == 0:
+            ctx.moveTo(px, py)
+        else:
+            ctx.lineTo(px, py)
+    ctx.stroke()
+
 def draw_ball_and_dot(x, y):
     if debug:
         ctx.beginPath()
@@ -141,19 +173,17 @@ def draw_ball_and_dot(x, y):
         ctx.fillStyle = "black"
         ctx.fill()
 
-current_round = 1  # Текущий раунд, стартуем с 1
-
 async def animate():
-    global x, last_time, passed, running, show_ball, is_cooldown, fade_alpha, current_round
+    global x, last_time, passed, running, show_ball, is_cooldown, fade_alpha, round_count, eclipse_mode
     while True:
         await asyncio.sleep(0.016)
         if ctx is None:
             continue
 
         if not running:
-            # Пока не стартовали — рисуем только фон и полоски, но НЕ солнце/затмение
             draw_background()
             draw_stripes()
+            draw_trajectory()
             continue
 
         current_time = time.time()
@@ -174,17 +204,14 @@ async def animate():
 
             draw_background()
             draw_stripes()
+            draw_trajectory()
 
-            y = a * (x - h) ** 2 + height / 2 - a * h ** 2
+            y = a * (x - h) ** 2 + height / 2 - a * h ** 2 + parabola_offset
 
-            if rounds is not None and current_round == rounds and eclipse_loaded:
-                img_to_draw = eclipse_image
-            else:
-                img_to_draw = sun_image if sun_loaded else None
-
-            if img_to_draw:
+            if sun_loaded or eclipse_loaded:
                 sun_w = sun_h = height * 0.1
-                ctx.drawImage(img_to_draw, x - sun_w/2, y - sun_h/2, sun_w, sun_h)
+                img = eclipse_image if eclipse_mode else sun_image
+                ctx.drawImage(img, x - sun_w/2, y - sun_h/2, sun_w, sun_h)
 
             if show_ball:
                 draw_ball_and_dot(x, y)
@@ -202,13 +229,15 @@ async def animate():
                     fade_alpha = min(fade_alpha + fade_speed, 1.0)
                 draw_background()
                 draw_stripes()
+                draw_trajectory()
 
-            current_round += 1
-
-            # Если вышли за лимит раундов, останавливаем анимацию и НЕ рисуем дальше
-            if rounds is not None and current_round > rounds:
+            round_count += 1
+            if max_rounds and round_count >= max_rounds:
                 running = False
                 continue
+
+            if max_rounds and round_count + 1 == max_rounds:
+                eclipse_mode = True
 
             x = 0
             last_time = time.time()
@@ -227,36 +256,31 @@ async def animate():
                 sound.play()
                 passed.add(point)
 
-        y = a * (x - h) ** 2 + height / 2 - a * h ** 2
+        y = a * (x - h) ** 2 + height / 2 - a * h ** 2 + parabola_offset
 
         draw_background()
         draw_stripes()
+        draw_trajectory()
 
-        if running:
-            if rounds is not None and current_round >= rounds and eclipse_loaded:
-                img_to_draw = eclipse_image
-            elif sun_loaded:
-                img_to_draw = sun_image
-            else:
-                img_to_draw = None
+        if sun_loaded or eclipse_loaded:
+            sun_w = sun_h = height * 0.1
+            img = eclipse_image if eclipse_mode else sun_image
+            ctx.drawImage(img, x - sun_w/2, y - sun_h/2, sun_w, sun_h)
 
-            if img_to_draw:
-                sun_w = sun_h = height * 0.1
-                ctx.drawImage(img_to_draw, x - sun_w/2, y - sun_h/2, sun_w, sun_h)
-
-            if show_ball:
-                draw_ball_and_dot(x, y)
+        if show_ball:
+            draw_ball_and_dot(x, y)
 
 def on_keydown(event):
-    global running, show_ball, last_time, x, current_round
+    global running, show_ball, last_time, x, round_count, eclipse_mode
     if event.key == " ":
         if not running and bg_day_loaded:
             initialize_params()
             running = True
             show_ball = True
             x = 0
-            current_round = 1  # При старте анимации начинаем с первого круга
             last_time = time.time()
+            round_count = 0
+            eclipse_mode = (max_rounds == 1)
             sound.currentTime = 0
             sound.play()
 
@@ -297,6 +321,6 @@ sun_image.src = "sun.png"
 eclipse_image.src = "eclipse.png"
 
 asyncio.ensure_future(animate())
-  </py-script>
+</py-script>
 </body>
 </html>
