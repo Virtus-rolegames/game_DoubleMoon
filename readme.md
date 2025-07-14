@@ -1,7 +1,7 @@
 Параметры URL
 Можно задавать параметры через строку запроса (URL), например:
 
-index.html?time=60&cooldown=15&rounds=4&debug=false&offset=250&steepness=0.4
+timer.html?time=60&cooldown=15&rounds=4&debug=false&offset=250&steepness=0.4
 
 Доступные параметры:
 time — время (в секундах), за которое шарик проходит полный путь (по ширине канваса).
