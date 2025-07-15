@@ -67,6 +67,14 @@ try:
 except:
     total_time = 5.0
 
+# Время последнего раунда (eclipse)
+try:
+    eclipse_time = float(params.get("eclipse"))
+    if eclipse_time <= 0:
+        eclipse_time = total_time
+except:
+    eclipse_time = total_time
+
 # Время перезарядки
 try:
     cooldown = float(params.get("cooldown"))
@@ -174,7 +182,7 @@ def draw_ball_and_dot(x, y):
         ctx.fill()
 
 async def animate():
-    global x, last_time, passed, running, show_ball, is_cooldown, fade_alpha, round_count, eclipse_mode
+    global x, last_time, passed, running, show_ball, is_cooldown, fade_alpha, round_count, eclipse_mode, speed
     while True:
         await asyncio.sleep(0.016)
         if ctx is None:
@@ -239,14 +247,17 @@ async def animate():
             if max_rounds and round_count + 1 == max_rounds:
                 eclipse_mode = True
 
+            # Меняем скорость, если следующий раунд — последний
+            if max_rounds and round_count + 1 == max_rounds:
+                speed = width / eclipse_time
+            else:
+                speed = width / total_time
+
             x = 0
             last_time = time.time()
-
             is_cooldown = False
-
             sound.currentTime = 0
             sound.play()
-
             show_ball = True
             continue
 
@@ -271,7 +282,7 @@ async def animate():
             draw_ball_and_dot(x, y)
 
 def on_keydown(event):
-    global running, show_ball, last_time, x, round_count, eclipse_mode
+    global running, show_ball, last_time, x, round_count, eclipse_mode, speed
     if event.key == " ":
         if not running and bg_day_loaded:
             initialize_params()
@@ -281,6 +292,7 @@ def on_keydown(event):
             last_time = time.time()
             round_count = 0
             eclipse_mode = (max_rounds == 1)
+            speed = width / total_time
             sound.currentTime = 0
             sound.play()
 
